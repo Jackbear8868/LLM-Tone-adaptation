@@ -24,6 +24,7 @@ training_args = TrainingArguments(
     logging_steps=10,
     save_steps=100,
     save_total_limit=1,
+    max_grad_norm=1.0,
     fp16=True
 )
 
@@ -34,3 +35,6 @@ trainer = Trainer(
 )
 
 trainer.train()
+
+model.save_pretrained("./reward-style-model")
+tokenizer.save_pretrained("./reward-style-model")
