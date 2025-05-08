@@ -8,7 +8,19 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 dataset = load_dataset("json", data_files={"train": "data.jsonl"})["train"]
 
 def preprocess(examples):
-    return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
+    tokenized = tokenizer(examples["text"], truncation=True, padding="max_length", max_length=512)
+
+    # 顯示截斷情況（用來 debug）
+    for i, text in enumerate(examples["text"]):
+        tokens_full = tokenizer.tokenize(text)
+        if len(tokens_full) > 128:
+            print("⚠️ 發現長句：")
+            print(f"原始長度：{len(tokens_full)} tokens")
+            print(f"截斷後長度：{len(tokenized['input_ids'][i])} tokens")
+            print(f"原始文字：{text}")
+            print("—" * 50)
+
+    return tokenized
 
 dataset = dataset.map(preprocess, batched=True)
 dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])

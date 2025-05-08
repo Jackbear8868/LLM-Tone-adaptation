@@ -8,4 +8,10 @@ bitsandbytes
 torch
 matplotlib
 tqdm
+tensorboard
+torch-tb-profiler
+tiktoken
+einops
+scikit-learn
+transformers_stream_generator
 google-generativeai
