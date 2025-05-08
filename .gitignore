@@ -1,3 +1,5 @@
 reward-style-model/
+ppo_logs/
+ppo_checkpoints/
 
 .env

@@ -22,13 +22,22 @@ outputs = []
 
 for i, item in enumerate(data):
     prompt = item["text"]
-    response = model.generate_content("請產生與以下文章相近內容，但是不同語氣的句子，請只給相近的內容即可，不需要任何多餘的回覆：" + prompt)
-    reply = response.text.strip()
+    print(i, prompt[:50])
+    system_prompt = "請產生與以下文章語義相近但語氣不同的句子，請只回覆該句子，不要額外說明："
 
-    print(f"第 {i} 個回應: {reply}")
+    for j in range(3):  # 每個 prompt 產生 3 種不同語氣的版本
+        response = model.generate_content(
+            system_prompt + prompt,
+            generation_config={
+                "temperature": 0.9,      # 提升創造性
+                "top_p": 0.9,
+            }
+        )
+        reply = response.text.strip()
+
+        outputs.append({"text": reply, "label": 0})
+        time.sleep(5)  # 稍作等待，避免 API rate limit
     outputs.append({"text": prompt, "label": 1})
-    outputs.append({"text": reply, "label": 0})
-    time.sleep(5)
 
 # 儲存結果為 JSONL
 with open("gemini_responses.jsonl", "w", encoding="utf-8") as out_f:
