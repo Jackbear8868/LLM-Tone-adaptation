@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 import torch
 
 # 載入 tokenizer 和模型
-model_path = "./reward-style-model"
+model_path = "./best-model"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForSequenceClassification.from_pretrained(model_path)
 model.eval()

@@ -3,6 +3,7 @@ import os
 import json
 import google.generativeai as genai
 import time
+import random
 
 # 載入 .env 檔案
 load_dotenv()
@@ -36,9 +37,10 @@ for i, item in enumerate(data):
         reply = response.text.strip()
 
         outputs.append({"text": reply, "label": 0})
-        time.sleep(5)  # 稍作等待，避免 API rate limit
+        time.sleep(4)  # 稍作等待，避免 API rate limit
     outputs.append({"text": prompt, "label": 1})
 
+random.shuffle(outputs)
 # 儲存結果為 JSONL
 with open("gemini_responses.jsonl", "w", encoding="utf-8") as out_f:
     for item in outputs:

@@ -41,6 +41,7 @@ lora_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM
 )
 
+
 # === Model and Old Model Initialization ===
 def init_peft_model():
     base = AutoModelForCausalLM.from_pretrained(
@@ -56,6 +57,9 @@ old_model = init_peft_model()
 old_model.load_state_dict(model.state_dict())
 optimizer = Adam(model.parameters(), lr=LR)
 
+print(model.named_modules())
+return 0
+
 # === Reward Model ===
 reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL_NAME)
 reward_model = AutoModelForSequenceClassification.from_pretrained("./reward-style-model").to("cuda")
@@ -69,24 +73,28 @@ def get_reward(texts):
 
 import json
 # === Training Prompts ===
-with open("ml_prompts.json", "r", encoding="utf-8") as f:
+with open("prompts.json", "r", encoding="utf-8") as f:
     prompts = json.load(f)
 
 from tqdm import tqdm
 from collections import deque
 import numpy as np
+import random
 
 reward_window = deque(maxlen=50)  # 平滑 reward 用
 best_avg_reward = -float("inf")
 last_checkpoint_dir = os.path.join(save_dir, "last_checkpoint")
 best_checkpoint_dir = os.path.join(save_dir, "best_checkpoint")
+NUM_PROMPTS_PER_EPOCH = 40
 
 for epoch in range(EPOCHS):
     epoch_rewards = []
     epoch_losses = []
     epoch_kls = []
 
-    loop = tqdm(prompts, desc=f"Epoch {epoch}", leave=False)
+    selected_prompts = random.sample(prompts, NUM_PROMPTS_PER_EPOCH)
+    loop = tqdm(selected_prompts, desc=f"Epoch {epoch}", leave=False)
+
     skipped_steps = 0
 
     for step, prompt in enumerate(loop):
