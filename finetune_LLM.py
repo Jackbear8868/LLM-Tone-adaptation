@@ -58,7 +58,6 @@ old_model.load_state_dict(model.state_dict())
 optimizer = Adam(model.parameters(), lr=LR)
 
 print(model.named_modules())
-return 0
 
 # === Reward Model ===
 reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL_NAME)
