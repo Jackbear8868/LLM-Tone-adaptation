@@ -20,9 +20,8 @@ save_every = 100
 # === Configuration ===
 MODEL_NAME = "Qwen/Qwen-1_8B-Chat"
 REWARD_MODEL_NAME = "roberta-base"
-EPOCHS = 20
-MAX_NEW_TOKENS = 400
-LR = 1e-5
+MAX_NEW_TOKENS = 512
+LR = 5e-6
 EPS_CLIP = 0.2
 
 # === Tokenizer ===
@@ -57,7 +56,8 @@ old_model = init_peft_model()
 old_model.load_state_dict(model.state_dict())
 optimizer = Adam(model.parameters(), lr=LR)
 
-print(model.named_modules())
+# for name, module in model.named_modules():
+#     print(name)
 
 # === Reward Model ===
 reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL_NAME)
@@ -84,17 +84,20 @@ reward_window = deque(maxlen=50)  # 平滑 reward 用
 best_avg_reward = -float("inf")
 last_checkpoint_dir = os.path.join(save_dir, "last_checkpoint")
 best_checkpoint_dir = os.path.join(save_dir, "best_checkpoint")
-NUM_PROMPTS_PER_EPOCH = 40
+EPOCHS = 100
+
+global_step = 0
+NUM_PROMPTS_PER_EPOCH = 100
 
 for epoch in range(EPOCHS):
     epoch_rewards = []
     epoch_losses = []
     epoch_kls = []
+    skipped_steps = 0
 
+    random.seed(epoch)  # 固定種子保證可重現
     selected_prompts = random.sample(prompts, NUM_PROMPTS_PER_EPOCH)
     loop = tqdm(selected_prompts, desc=f"Epoch {epoch}", leave=False)
-
-    skipped_steps = 0
 
     for step, prompt in enumerate(loop):
         model.train()
@@ -117,12 +120,10 @@ for epoch in range(EPOCHS):
         decoded_text = tokenizer.decode(full_input[0], skip_special_tokens=True)
 
         reward = get_reward([decoded_text])[0]
-        reward = np.clip(reward, -1.0, 2.0)  # ✅ reward clipping
+        reward = np.clip(reward, -1.0, 2.0)
         reward_window.append(reward)
         avg_reward = np.mean(reward_window)
-        baseline = avg_reward
-        advantage = reward - baseline
-        advantage = float(np.clip(advantage, -5.0, 5.0))  # ✅ advantage clipping
+        advantage = float(np.clip(reward - avg_reward, -5.0, 5.0))
 
         labels = response_ids.clone()
         logits = model(input_ids=response_ids, attention_mask=attention_mask).logits
@@ -138,37 +139,24 @@ for epoch in range(EPOCHS):
 
         ratio = torch.exp(log_prob_sum - old_log_prob_sum)
         clipped_ratio = torch.clamp(ratio, 1 - EPS_CLIP, 1 + EPS_CLIP)
-
-        # ✅ Optional: KL penalty
         kl_div = (old_log_prob_sum - log_prob_sum).mean()
-        kl_penalty_weight = 0.1  # 可調整的權重
+
         policy_loss = -torch.min(ratio * advantage, clipped_ratio * advantage).mean()
-        policy_loss += kl_penalty_weight * kl_div  # ✅ 加入 KL 項（鼓勵與舊策略靠近）
+        policy_loss += 0.1 * kl_div
 
-        MAX_LOSS = 10.0
-        MAX_KL = 2.0
-        MIN_KL = 0.0
-
-        if not torch.isfinite(policy_loss) or abs(policy_loss.item()) > MAX_LOSS:
+        if not torch.isfinite(policy_loss) or abs(policy_loss.item()) > 10.0:
             skipped_steps += 1
             continue
-        if not np.isfinite(kl_div.item()) or kl_div.item() < MIN_KL or kl_div.item() > MAX_KL:
-            skipped_steps += 1
-            continue
-        if not torch.isfinite(ratio).all():
-            skipped_steps += 1
-            continue
-        if not torch.isfinite(log_prob_sum).all() or not torch.isfinite(old_log_prob_sum).all():
+        if not np.isfinite(kl_div.item()) or kl_div.item() < 0.0 or kl_div.item() > 2.0:
             skipped_steps += 1
             continue
 
         optimizer.zero_grad()
         policy_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # ✅ gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         old_model.load_state_dict(model.state_dict())
 
-        global_step = epoch * len(prompts) + step
         writer.add_scalar("Reward/Instant", reward, global_step)
         writer.add_scalar("Reward/Avg", avg_reward, global_step)
         writer.add_scalar("Advantage", advantage, global_step)
@@ -185,11 +173,10 @@ for epoch in range(EPOCHS):
             tokenizer.save_pretrained(checkpoint_path)
             print(f"✅ Saved model to: {checkpoint_path}")
 
-    print(f"⚠️ Epoch {epoch} skipped steps: {skipped_steps} / {len(prompts)}")
-    print(
-        f"📘 [Epoch {epoch}] AvgReward: {np.mean(epoch_rewards):.4f} | "
-        f"AvgLoss: {np.mean(epoch_losses):.4f} | AvgKL: {np.mean(epoch_kls):.4f}"
-    )
+        global_step += 1
+
+    print(f"⚠️ Epoch {epoch} skipped steps: {skipped_steps} / {NUM_PROMPTS_PER_EPOCH}")
+    print(f"📘 [Epoch {epoch}] AvgReward: {np.mean(epoch_rewards):.4f} | AvgLoss: {np.mean(epoch_losses):.4f} | AvgKL: {np.mean(epoch_kls):.4f}")
 
     model.save_pretrained(last_checkpoint_dir)
     tokenizer.save_pretrained(last_checkpoint_dir)
