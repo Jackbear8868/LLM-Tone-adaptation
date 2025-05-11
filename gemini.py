@@ -42,7 +42,7 @@ for i, item in enumerate(data):
 
 random.shuffle(outputs)
 # 儲存結果為 JSONL
-with open("gemini_responses.jsonl", "w", encoding="utf-8") as out_f:
+with open("data.jsonl", "w", encoding="utf-8") as out_f:
     for item in outputs:
         out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
