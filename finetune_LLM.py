@@ -7,6 +7,9 @@ from torch.optim import Adam
 from collections import deque
 import numpy as np
 import os
+import json
+import random
+from tqdm import tqdm
 
 # === TensorBoard and Checkpoint Directories ===
 log_dir = "./ppo_logs"
@@ -19,10 +22,12 @@ save_every = 100
 
 # === Configuration ===
 MODEL_NAME = "Qwen/Qwen-1_8B-Chat"
-REWARD_MODEL_NAME = "roberta-base"
-MAX_NEW_TOKENS = 512
-LR = 5e-6
+REWARD_MODEL_NAME = "./best-model"
+MAX_NEW_TOKENS = 400
+LR = 1e-5
 EPS_CLIP = 0.2
+REWARD_SCALE = 4.0
+REWARD_SHIFT = -2.0
 
 # === Tokenizer ===
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
@@ -32,14 +37,13 @@ assert tokenizer.pad_token_id is not None, "❌ pad_token_id 還是 None"
 
 # === LoRA Configuration ===
 lora_config = LoraConfig(
-    r=8,
-    lora_alpha=16,
-    target_modules=["attn.c_attn", "attn.c_proj"],
+    r=16,
+    lora_alpha=32,
+    target_modules=["attn.c_attn", "attn.c_proj", "mlp.c_fc", "mlp.c_proj"],
     lora_dropout=0.05,
     bias="none",
     task_type=TaskType.CAUSAL_LM
 )
-
 
 # === Model and Old Model Initialization ===
 def init_peft_model():
@@ -54,40 +58,42 @@ def init_peft_model():
 model = init_peft_model()
 old_model = init_peft_model()
 old_model.load_state_dict(model.state_dict())
-optimizer = Adam(model.parameters(), lr=LR)
-
-# for name, module in model.named_modules():
-#     print(name)
+optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LR)
 
 # === Reward Model ===
 reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL_NAME)
 reward_model = AutoModelForSequenceClassification.from_pretrained("./reward-style-model").to("cuda")
 
 def get_reward(texts):
-    inputs = reward_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to("cuda")
+    inputs = reward_tokenizer(
+        texts,
+        padding=True,
+        truncation=True,
+        max_length=512,
+        return_tensors="pt"
+    ).to("cuda")
+
     with torch.no_grad():
         logits = reward_model(**inputs).logits
-        probs = F.softmax(logits, dim=-1)
-    return probs[:, 1].detach().cpu().tolist()
+        if logits.shape[-1] == 2:
+            probs = F.softmax(logits, dim=-1)
+            reward = probs[:, 1] * REWARD_SCALE + REWARD_SHIFT
+        else:
+            reward = logits[:, 0] * REWARD_SCALE + REWARD_SHIFT
 
-import json
+    return reward.detach().cpu().tolist()
+
 # === Training Prompts ===
 with open("prompts.json", "r", encoding="utf-8") as f:
     prompts = json.load(f)
 
-from tqdm import tqdm
-from collections import deque
-import numpy as np
-import random
-
-reward_window = deque(maxlen=50)  # 平滑 reward 用
+reward_window = deque(maxlen=20)
 best_avg_reward = -float("inf")
 last_checkpoint_dir = os.path.join(save_dir, "last_checkpoint")
 best_checkpoint_dir = os.path.join(save_dir, "best_checkpoint")
 EPOCHS = 100
-
-global_step = 0
 NUM_PROMPTS_PER_EPOCH = 100
+global_step = 0
 
 for epoch in range(EPOCHS):
     epoch_rewards = []
@@ -95,7 +101,7 @@ for epoch in range(EPOCHS):
     epoch_kls = []
     skipped_steps = 0
 
-    random.seed(epoch)  # 固定種子保證可重現
+    random.seed(epoch)
     selected_prompts = random.sample(prompts, NUM_PROMPTS_PER_EPOCH)
     loop = tqdm(selected_prompts, desc=f"Epoch {epoch}", leave=False)
 
@@ -110,8 +116,8 @@ for epoch in range(EPOCHS):
                 attention_mask=input_attention_mask,
                 max_new_tokens=MAX_NEW_TOKENS,
                 do_sample=True,
-                top_k=50,
-                top_p=0.95
+                top_k=20,
+                top_p=0.9
             )
 
         response_ids = generated[:, input_ids.shape[-1]:]
@@ -162,6 +168,10 @@ for epoch in range(EPOCHS):
         writer.add_scalar("Advantage", advantage, global_step)
         writer.add_scalar("Loss/Policy_Loss", policy_loss.item(), global_step)
         writer.add_scalar("KL_Divergence", kl_div.item(), global_step)
+        if step % 20 == 0:
+            writer.add_text("Sample/Prompt", prompt, global_step)
+            writer.add_text("Sample/Response", decoded_text, global_step)
+            writer.add_scalar("Reward/Example", reward, global_step)
 
         epoch_rewards.append(reward)
         epoch_losses.append(policy_loss.item())
